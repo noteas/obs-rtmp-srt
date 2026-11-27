@@ -24,14 +24,26 @@ OBS RTMP 推流栈的 fork。用途：作为 [obs-bilibili-stream](https://githu
 
 ## 补丁清单（基线之上）
 
-实施中（口径来源 = obs-bilibili-stream 的逆向证据 E-24：B站 SRT 入口 = UDP **1935**、
+口径来源 = obs-bilibili-stream 逆向证据 E-24/E-25/E-27（B站 SRT 入口 = UDP **1935**、
 **无 streamid**、`LATENCY=200ms`、`PAYLOADSIZE=1456`、`MAXBW=2MiB/s`、`CONNTIMEO=10s`、
-`LINGER=1s`、TSBPD/TLPKTDROP 关）：
+`LINGER=1s`、TSBPD/TLPKTDROP 关）。所有改动以 `RTMP_PROTOCOL_SRT`/`sb_srt` 门控，
+TCP/RTMP 既有行为不变：
 
-1. SRT 传输层（新文件 `srt_socket.c/h`）：`RTMP_Connect` 的 SRT 分支、
-   `RTMPSockBuf_Fill/Send/Close` 收发分支、`RTMP_Connect0` socket 选项分支、
-   `rtmp-stream.c` 两处 `ioctlsocket` 分支。
-2. `rtmpsrt://` scheme（`parseurl.c`）+ output 身份改为 `bvc_srt_output`（`rtmp-stream.c`）。
+1. **SRT 传输层（新文件 `librtmp/srt_sock.c/h`）**：`RTMP_SRT_Open/Recv/Send/Close/DataPending/Cleanup`，
+   唯一 `#include <srt/srt.h>` 处；E-24 §3 sockopt 序列 + `RTMP_SRT_DataPending`
+   （每 socket 一个 SRT epoll，替代 TCP 的 `ioctl(FIONREAD)`）。
+   libsrt 1.4/1.5 差异（`SRTO_LINGER` int↔struct、Message API、单次 send ≤1316B）在此收敛。
+2. **`librtmp/rtmp.h`**：`RTMP_PROTOCOL_SRT = 0x40`、`RTMPSockBuf.sb_srt`/`sb_srt_eid`、
+   `RTMP_LNK.srtMaxBandwidth`/`srtRcvTimeoutMs`。
+3. **`librtmp/parseurl.c`**：认 `rtmpsrt://` scheme。
+4. **`librtmp/rtmp.c`** 分支点：`RTMP_Connect` SRT 拨号、`RTMP_Connect0` 跳过 TCP 选项、
+   `RTMPSockBuf_Fill/Send/Close` 换 srt 收发关、发送失败 linger 分支、
+   `RTMPProtocolStringsLower[protocol]` 越界防御、`RTMP_Reset` 填官方默认值。
+5. **`rtmp-stream.c`**：`handle_socket_read` FIONREAD→`RTMP_SRT_DataPending`、
+   rtmpsrt 沿用 rtmps 先例关 `new_socket_loop`、output 身份 `bvc_srt_output` / `protocols=bvc_srt`。
+6. **构建**：`CMakeLists.txt`（静态库，`USE_MBEDTLS CRYPTO`，照抄上游 obs-outputs 依赖块）
+   + `cmake/finders/FindMbedTLS.cmake`（OBS 原文）。crypto 后端 = mbedTLS，与官方 OBS 一致；
+   TLS 本身 rtmpsrt 用不到（SSL 位不置），握手 HMAC-SHA256 复用 librtmp 原生 `USE_MBEDTLS` 路径。
 
 ## 许可证
 
