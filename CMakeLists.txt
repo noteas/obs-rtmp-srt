@@ -104,4 +104,7 @@ target_link_libraries(
           $<$<PLATFORM_ID:Windows>:winmm>
           $<$<PLATFORM_ID:Windows>:iphlpapi>
           $<$<PLATFORM_ID:Windows>:crypt32>
+          # mbedcrypto(obs-deps 静态库)的 entropy_poll 调 BCryptGenRandom，
+          # 最终可执行/插件 DLL 链接时必须带上 bcrypt（2026-11-27 CI 实证 LNK2001）
+          $<$<PLATFORM_ID:Windows>:bcrypt>
 )
