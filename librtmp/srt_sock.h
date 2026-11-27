@@ -22,7 +22,8 @@ extern "C" {
  * 失败返回 INVALID_SOCKET（srt/系统错误已记日志）。
  * bindaddr/bindlen = 可空本地绑定（对应 OBS bind_ip 设置，官方同款 bind→connect）；
  * maxbw = SRTO_MAXBW（0 = libsrt 自动；官方恒设 0x200000，见 BVC_SRT_DEFAULT_MAXBW）；
- * rcvtimeo_ms = SRTO_RCVTIMEO，0 = 阻塞（官方 key 缺省语义，E-24 §5）。 */
+ * rcvtimeo_ms = SRTO_RCVTIMEO。官方运行时恒注入 settings 并 clamp 到 [3,60]s、
+ * 负值回退 30s（E-24 §5），故 RTMP_Reset 默认 30000；0=阻塞仅为 key 缺省路径保留。 */
 SOCKET RTMP_SRT_Open(RTMPSockBuf *sb, const char *host, int port, const struct sockaddr_storage *bindaddr,
                      int bindlen, int maxbw, int rcvtimeo_ms);
 

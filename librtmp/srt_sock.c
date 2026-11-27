@@ -3,7 +3,10 @@
  *
  * 行为基准 = 官方 bvc-srt-stream.dll（E-24 §3/§7，libsrt 1.4.4；1.5.x 差异见 E-24 §9）：
  *   TRANSTYPE=live, CONNTIMEO=10000ms, PAYLOADSIZE=1456, LATENCY=200ms,
- *   TLPKTDROP=off, TSBPD=off, MAXBW=0x200000, LINGER=1s, RCVTIMEO=rcvtimeo_ms(0=阻塞)。
+ *   TLPKTDROP=off, TSBPD=off, MAXBW=0x200000, LINGER=1s,
+ *   RCVTIMEO=rcvtimeo_ms（E-24 §5：官方运行时恒注入并 clamp 到 [3,60]s，
+ *   负值回退 30s ⇒ 默认取 30s，等价上游 TCP receiveTimeout；0=阻塞仅为
+ *   key 缺省这一 LiveHime 从不走的路径保留）。
  * 不设 SRTO_STREAMID、不设密码：鉴权 100% 在 RTMP 层（E-24 §3/§6）。
  *
  * 跨平台：<srt/srt.h> 只在本文件出现；SRT 句柄以 RTMP 的 SOCKET 类型透传给 rtmp.c，
@@ -94,7 +97,7 @@ static void apply_official_srt_options(SRTSOCKET sock, int maxbw, int rcvtimeo_m
 		sso_set_i(sock, SRTO_LINGER, "LINGER(1s)", v);
 	}
 
-	sso_set_i(sock, SRTO_RCVTIMEO, "RCVTIMEO", rcvtimeo_ms); /* 0 = 阻塞（官方缺省） */
+	sso_set_i(sock, SRTO_RCVTIMEO, "RCVTIMEO", rcvtimeo_ms); /* 默认 30000，见文件头 E-24 §5 */
 }
 
 SOCKET RTMP_SRT_Open(RTMPSockBuf *sb, const char *host, int port, const struct sockaddr_storage *bindaddr,
@@ -106,11 +109,15 @@ SOCKET RTMP_SRT_Open(RTMPSockBuf *sb, const char *host, int port, const struct s
 	struct addrinfo *ai;
 	SOCKET out = INVALID_SOCKET;
 
-	if (srt_startup() == SRT_ERROR) {
-		RTMP_Log(RTMP_LOGERROR, "[srt] srt_startup failed: %s", srt_getlasterror_str());
-		return INVALID_SOCKET;
+	/* srt_startup 引用计数（≥1.4 语义）：仅首次真正 startup，卸载时配平一次；
+	 * 重连不再累积引用。 */
+	if (!g_srt_started) {
+		if (srt_startup() == SRT_ERROR) {
+			RTMP_Log(RTMP_LOGERROR, "[srt] srt_startup failed: %s", srt_getlasterror_str());
+			return INVALID_SOCKET;
+		}
+		g_srt_started = 1;
 	}
-	g_srt_started = 1;
 
 	snprintf(portstr, sizeof(portstr), "%d", port);
 	memset(&hints, 0, sizeof(hints));

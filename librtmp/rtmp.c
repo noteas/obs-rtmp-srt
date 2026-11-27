@@ -480,7 +480,7 @@ RTMP_Reset(RTMP *r)
     r->Link.receiveTimeout = 30;
     r->Link.sendTimeout = 15;
     r->Link.srtMaxBandwidth = BVC_SRT_DEFAULT_MAXBW; /* this fork: official 0x200000 (E-24 §3) */
-    r->Link.srtRcvTimeoutMs = 0;                     /* this fork: blocking recv, official key-absent default (E-24 §5) */
+    r->Link.srtRcvTimeoutMs = 30000;                 /* this fork: 30s — official runtime always lands in clamp[3,60]s with 30s fallback, ≡ TCP receiveTimeout (E-24 §5) */
     r->Link.swfAge = 30;
 }
 
@@ -1081,6 +1081,12 @@ RTMP_Connect(RTMP *r, RTMPPacket *cp)
      * SOCKS is not supported for SRT. */
     if (r->Link.protocol & RTMP_PROTOCOL_SRT) {
         int result_srt = FALSE;
+
+        if (r->Link.socksport) { /* SRT is connect-based; the SOCKS4 path speaks TCP only */
+            RTMP_Log(RTMP_LOGERROR, "%s, SOCKS is not supported for rtmpsrt URLs", __FUNCTION__);
+            r->last_error_code = E_INVAL;
+            goto fail;
+        }
 
         r->m_sb.sb_srt = TRUE;
         r->m_sb.sb_srt_eid = -1;
