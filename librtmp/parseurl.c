@@ -62,6 +62,8 @@ int RTMP_ParseURL(const char *url, int *protocol, AVal *host, unsigned int *port
             *protocol = RTMP_PROTOCOL_RTMPTE;
         else if(len == 6 && strncasecmp(url, "rtmpts", 6)==0)
             *protocol = RTMP_PROTOCOL_RTMPTS;
+        else if(len == 8 && strncasecmp(url, "rtmpsrt", 8)==0) /* this fork: RTMP over SRT (E-24 §2) */
+            *protocol = RTMP_PROTOCOL_SRT;
         else
         {
             RTMP_Log(RTMP_LOGWARNING, "Unknown protocol!\n");

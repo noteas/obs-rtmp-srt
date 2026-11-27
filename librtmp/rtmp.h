@@ -196,6 +196,7 @@ extern "C"
 #define RTMP_PROTOCOL_RTMPTE    (RTMP_FEATURE_HTTP|RTMP_FEATURE_ENC)
 #define RTMP_PROTOCOL_RTMPTS    (RTMP_FEATURE_HTTP|RTMP_FEATURE_SSL)
 #define RTMP_PROTOCOL_RTMFP     RTMP_FEATURE_MFP
+#define RTMP_PROTOCOL_SRT       0x40    /* this fork: rtmpsrt:// = RTMP over SRT (E-24 §2; same private bit as the official bvc-srt fork) */
 
 #define RTMP_DEFAULT_CHUNKSIZE	128
 
@@ -268,6 +269,8 @@ extern "C"
     {
         struct sockaddr_storage sb_addr; /* address of remote */
         SOCKET sb_socket;
+        int sb_srt;             /* this fork: sb_socket is an SRTSOCKET, not a kernel fd */
+        int sb_srt_eid;         /* this fork: per-socket SRT epoll id for readiness polling; -1 = none */
         int sb_size;		/* number of unprocessed bytes in buffer */
         char *sb_start;		/* pointer into sb_pBuffer of next byte to process */
         char sb_buf[RTMP_BUFFER_CACHE_SIZE];	/* data read from socket */
@@ -332,6 +335,8 @@ extern "C"
         int protocol;
         int receiveTimeout;	/* connection receive timeout in seconds */
         int sendTimeout;	/* connection send timeout in seconds */
+        int srtMaxBandwidth;	/* this fork: SRTO_MAXBW bytes/s, 0 = libsrt default; official sets 0x200000 (E-24 §3) */
+        int srtRcvTimeoutMs;	/* this fork: SRTO_RCVTIMEO in ms, 0 = blocking (official key-absent default, E-24 §5) */
 
 #define RTMP_PUB_NAME   0x0001  /* send login to server */
 #define RTMP_PUB_RESP   0x0002  /* send salted password hash */

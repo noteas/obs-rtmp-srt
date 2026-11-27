@@ -31,6 +31,7 @@
 
 #include "rtmp_sys.h"
 #include "log.h"
+#include "srt_sock.h"
 
 #include "happy-eyeballs.h"
 #include <util/platform.h>
@@ -478,6 +479,8 @@ RTMP_Reset(RTMP *r)
     r->Link.nStreams = 0;
     r->Link.receiveTimeout = 30;
     r->Link.sendTimeout = 15;
+    r->Link.srtMaxBandwidth = BVC_SRT_DEFAULT_MAXBW; /* this fork: official 0x200000 (E-24 §3) */
+    r->Link.srtRcvTimeoutMs = 0;                     /* this fork: blocking recv, official key-absent default (E-24 §5) */
     r->Link.swfAge = 30;
 }
 
@@ -687,7 +690,10 @@ int RTMP_SetupURL(RTMP *r, char *url)
                 r->Link.tcUrl.av_val = malloc(len);
                 r->Link.tcUrl.av_len = snprintf(r->Link.tcUrl.av_val, len,
                     "%s://%.*s:%d/%.*s",
-                    RTMPProtocolStringsLower[r->Link.protocol],
+                    /* this fork: index is the raw protocol bit value; SRT (0x40) would index
+                     * out of bounds. SRT never reaches here via URL setup (app embedded in
+                     * url => tcUrl is the url prefix), fall back to "rtmp" defensively. */
+                    RTMPProtocolStringsLower[(r->Link.protocol & RTMP_PROTOCOL_SRT) ? 0 : r->Link.protocol],
                     r->Link.hostname.av_len, r->Link.hostname.av_val,
                     r->Link.port,
                     r->Link.app.av_len, r->Link.app.av_val);
@@ -882,6 +888,12 @@ RTMP_Connect0(RTMP *r, SOCKET socket_fd)
 
     r->m_sb.sb_socket = socket_fd;
 
+    if (r->m_sb.sb_srt) {
+        /* this fork: every SRT option (timeouts, linger, bandwidth; E-24 §3) is already
+         * applied via SRTO_* inside RTMP_SRT_Open; TCP setsockopt does not apply. */
+        return TRUE;
+    }
+
     if (r->m_sb.sb_socket != INVALID_SOCKET)
     {
         if (r->Link.socksport)
@@ -1061,6 +1073,37 @@ RTMP_Connect(RTMP *r, RTMPPacket *cp)
         /* Connect directly */
         hostname = get_hostname(&r->Link.hostname, &free_hostname);
         port = r->Link.port;
+    }
+
+    /* this fork: rtmpsrt:// — bilibili private SRT transport (ADR-0008, evidence E-24).
+     * Replaces the whole TCP/happy-eyeballs path with a single SRT connect (UDP).
+     * bind_ip maps to srt_bind() before connect, same bind->connect order as official.
+     * SOCKS is not supported for SRT. */
+    if (r->Link.protocol & RTMP_PROTOCOL_SRT) {
+        int result_srt = FALSE;
+
+        r->m_sb.sb_srt = TRUE;
+        r->m_sb.sb_srt_eid = -1;
+        r->m_sb.sb_socket = RTMP_SRT_Open(&r->m_sb, hostname, port,
+                                          r->m_bindIP.addrLen ? (const struct sockaddr_storage *)&r->m_bindIP.addr : NULL,
+                                          r->m_bindIP.addrLen, r->Link.srtMaxBandwidth, r->Link.srtRcvTimeoutMs);
+        if (r->m_sb.sb_socket != INVALID_SOCKET) {
+            result_srt = RTMP_Connect0(r, r->m_sb.sb_socket);
+            if (result_srt) {
+                r->m_bSendCounter = TRUE;
+                result_srt = RTMP_Connect1(r, cp);
+            }
+        } else {
+            r->last_error_code = GetSockError();
+        }
+
+        if (!result_srt)
+            RTMP_Close(r);
+        if (happy_ctx)
+            happy_eyeballs_destroy(happy_ctx);
+        if (free_hostname)
+            free(hostname);
+        return result_srt;
     }
 
     /* Set local bind address (if present) */
@@ -1609,9 +1652,11 @@ WriteN(RTMP *r, const char *buffer, int n)
             // we could end up writing an unpublish message which some services
             // treat as a clean shutdown. We need to disable lingering too so
             // the remote side sees an abortive shutdown (RST).
-            l.l_onoff = 1;
-            l.l_linger = 0;
-            setsockopt(r->m_sb.sb_socket, SOL_SOCKET, SO_LINGER, (char *)&l, sizeof(l));
+            if (!r->m_sb.sb_srt) { /* this fork: SRT abort semantics come from SRTO_LINGER (E-24 §3) */
+                l.l_onoff = 1;
+                l.l_linger = 0;
+                setsockopt(r->m_sb.sb_socket, SOL_SOCKET, SO_LINGER, (char *)&l, sizeof(l));
+            }
             RTMPSockBuf_Close(&r->m_sb);
 
             RTMP_Close(r);
@@ -4475,7 +4520,10 @@ RTMPSockBuf_Fill(RTMPSockBuf *sb)
         else
 #endif
         {
-            nBytes = recv(sb->sb_socket, sb->sb_start + sb->sb_size, nBytes, MSG_NOSIGNAL);
+            /* this fork: SRT handle is not a kernel fd; recv() must go through the SRT API */
+            nBytes = sb->sb_srt
+                         ? RTMP_SRT_Recv(sb->sb_socket, sb->sb_start + sb->sb_size, nBytes)
+                         : recv(sb->sb_socket, sb->sb_start + sb->sb_size, nBytes, MSG_NOSIGNAL);
         }
         if (nBytes > 0)
         {
@@ -4528,7 +4576,9 @@ RTMPSockBuf_Send(RTMPSockBuf *sb, const char *buf, int len)
     else
 #endif
     {
-        rc = send(sb->sb_socket, buf, len, MSG_NOSIGNAL);
+        /* this fork: see RTMPSockBuf_Fill — SRT send through the SRT API */
+        rc = sb->sb_srt ? RTMP_SRT_Send(sb->sb_socket, buf, len)
+                        : send(sb->sb_socket, buf, len, MSG_NOSIGNAL);
     }
     return rc;
 }
@@ -4544,6 +4594,8 @@ RTMPSockBuf_Close(RTMPSockBuf *sb)
         sb->sb_ssl = NULL;
     }
 #endif
+    if (sb->sb_srt) /* this fork: releases the SRT socket + its epoll readiness id */
+        return RTMP_SRT_Close(sb);
     if (sb->sb_socket != INVALID_SOCKET)
         return closesocket(sb->sb_socket);
     return 0;
