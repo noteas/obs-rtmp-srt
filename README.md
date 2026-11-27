@@ -40,7 +40,8 @@ TCP/RTMP 既有行为不变：
    `RTMPSockBuf_Fill/Send/Close` 换 srt 收发关、发送失败 linger 分支、
    `RTMPProtocolStringsLower[protocol]` 越界防御、`RTMP_Reset` 填官方默认值。
 5. **`rtmp-stream.c`**：`handle_socket_read` FIONREAD→`RTMP_SRT_DataPending`、
-   rtmpsrt 沿用 rtmps 先例关 `new_socket_loop`、output 身份 `bvc_srt_output` / `protocols=bvc_srt`。
+   rtmpsrt 沿用 rtmps 先例关 `new_socket_loop`、output 身份 `bvc_srt_output` / `protocols=bvc_srt`、
+   `init_send` 按官方公式写入 `srtMaxBandwidth`（E-24 §5，上游码率聚合值 ×1.58）。
 6. **构建**：`CMakeLists.txt`（静态库，`USE_MBEDTLS CRYPTO`，照抄上游 obs-outputs 依赖块）
    + `cmake/finders/FindMbedTLS.cmake`（OBS 原文）。crypto 后端 = mbedTLS，与官方 OBS 一致；
    TLS 本身 rtmpsrt 用不到（SSL 位不置），握手 HMAC-SHA256 复用 librtmp 原生 `USE_MBEDTLS` 路径。

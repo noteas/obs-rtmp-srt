@@ -1442,6 +1442,15 @@ static bool init_connect(struct rtmp_stream *stream)
 	stream->dbr_orig_bitrate = (long)overall_video_bitrate;
 	stream->dbr_cur_bitrate = stream->dbr_orig_bitrate;
 	stream->dbr_est_bitrate = 0;
+
+	/* this fork: official SRT MAXBW formula (E-24 §5, bililive injects on every start):
+	 * (video+audio) kbps × 1.03 × 1.5 × 128 ≈ 1.58× actual byte rate. Falls back to the
+	 * fixed official default when no bitrates are visible yet. */
+	if (stream->rtmp.Link.protocol & RTMP_PROTOCOL_SRT) {
+		long long total_kbps = overall_video_bitrate + overall_audio_bitrate;
+		if (total_kbps > 0)
+			stream->rtmp.Link.srtMaxBandwidth = (int)(total_kbps * 19776 / 100);
+	}
 	stream->dbr_inc_bitrate = stream->dbr_orig_bitrate / 10;
 	stream->dbr_inc_timeout = 0;
 	stream->dbr_enabled = dbr_capable && obs_data_get_bool(settings, OPT_DYN_BITRATE);
