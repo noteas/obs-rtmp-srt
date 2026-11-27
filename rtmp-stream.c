@@ -18,6 +18,7 @@
 #include "rtmp-stream.h"
 #include "rtmp-av1.h"
 #include "rtmp-hevc.h"
+#include "librtmp/srt_sock.h" /* this fork: SRT readiness probe for handle_socket_read */
 
 #include <obs-avc.h>
 #include <obs-hevc.h>
@@ -385,13 +386,23 @@ static int handle_socket_read(struct rtmp_stream *stream)
 	int ret = 0;
 	int recv_size = 0;
 	if (!stream->new_socket_loop) {
-#ifdef _WIN32
-		ret = ioctlsocket(stream->rtmp.m_sb.sb_socket, FIONREAD, (u_long *)&recv_size);
-#else
-		ret = ioctl(stream->rtmp.m_sb.sb_socket, FIONREAD, &recv_size);
-#endif
+		bool have_data;
 
-		if (ret >= 0 && recv_size > 0) {
+		if (stream->rtmp.m_sb.sb_srt) {
+			/* this fork: SRT socket ids are not kernel fds — ioctl(FIONREAD) would
+			 * fail; the per-socket SRT epoll answers readiness instead. The byte
+			 * count is irrelevant: RTMPSockBuf_Fill sizes its own read. */
+			have_data = RTMP_SRT_DataPending(&stream->rtmp.m_sb) > 0;
+		} else {
+#ifdef _WIN32
+			ret = ioctlsocket(stream->rtmp.m_sb.sb_socket, FIONREAD, (u_long *)&recv_size);
+#else
+			ret = ioctl(stream->rtmp.m_sb.sb_socket, FIONREAD, &recv_size);
+#endif
+			have_data = ret >= 0 && recv_size > 0;
+		}
+
+		if (have_data) {
 			if (!process_recv_data(stream, (size_t)recv_size))
 				return -1;
 		}
@@ -1483,8 +1494,10 @@ static bool init_connect(struct rtmp_stream *stream)
 	stream->low_latency_mode = obs_data_get_bool(settings, OPT_LOWLATENCY_ENABLED);
 
 	// ugly hack for now, can be removed once new loop is reworked
-	if (stream->new_socket_loop && !strncmp(stream->path.array, "rtmps://", 8)) {
-		warn("Disabling network optimizations, not compatible with RTMPS");
+	if (stream->new_socket_loop && (!strncmp(stream->path.array, "rtmps://", 8) ||
+					/* this fork: select() can't watch SRT socket ids (not kernel fds) */
+					!strncmp(stream->path.array, "rtmpsrt://", 10))) {
+		warn("Disabling network optimizations, not compatible with RTMPS/SRT");
 		stream->new_socket_loop = false;
 	}
 #else
@@ -1980,12 +1993,14 @@ static int rtmp_stream_connect_time(void *data)
 }
 
 struct obs_output_info rtmp_output_info = {
-	.id = "rtmp_output",
+	/* this fork: registered by obs-bilibili-stream; id/protocols per ADR-0007
+	 * (the plugin exposes only its private rtmpsrt line, not generic RTMP) */
+	.id = "bvc_srt_output",
 	.flags = OBS_OUTPUT_AV | OBS_OUTPUT_ENCODED | OBS_OUTPUT_SERVICE | OBS_OUTPUT_MULTI_TRACK_AV,
 #ifdef NO_CRYPTO
 	.protocols = "RTMP",
 #else
-	.protocols = "RTMP;RTMPS",
+	.protocols = "bvc_srt",
 #endif
 #ifdef ENABLE_HEVC
 	.encoded_video_codecs = "h264;hevc;av1",
