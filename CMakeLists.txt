@@ -5,6 +5,13 @@
 #
 # Dependency wiring mirrors upstream plugins/obs-outputs/CMakeLists.txt verbatim
 # (USE_MBEDTLS CRYPTO, MbedTLS::mbedtls, ZLIB, jansson) — see README.
+#
+# 静态/动态口径(OBS 插件生态惯例):
+# - 本库 = STATIC,只作为插件 MODULE 的内部组成(从不单独发布),PIC 强制开启;
+# - 第三方依赖全部经 find_package 解析成 imported target,由模块/config 包决定
+#   后端形态:Linux 与 flatpak 解析为发行版共享库(.so,插件不打包第三方,
+#   DT_NEEDED 交给系统/OBS 运行时);Windows 解析为 obs-deps 的导入库/静态库
+#   (srt.dll 等由官方 OBS 安装包在 obs64 同目录提供)。
 cmake_minimum_required(VERSION 3.16...3.30)
 
 project(obs-rtmp-srt LANGUAGES C)
@@ -17,45 +24,18 @@ if(NOT TARGET OBS::libobs)
   find_package(libobs REQUIRED)
 endif()
 
+# OBS 32.2 官方 Find 模块(cmake/finders/,obs-outputs 同款):
+#   MbedTLS::mbedtls / ZLIB::ZLIB / jansson::jansson / Libsrt::Libsrt。
+# PREFER_CONFIG 只包住 MbedTLS(与上游 obs-outputs 逐字一致):Windows 走
+# obs-deps 自带的 MbedTLS config 包(带逐配置导入库与正确 CRT 运行期链接),
+# Linux/flatpak 无 config 包则自然落回本目录的 FindMbedTLS 模块。
+# SRT 是 fork 存在的全部理由,缺失一律硬失败(FindLibsrt 的失败信息含两端修法)。
+set(CMAKE_FIND_PACKAGE_PREFER_CONFIG TRUE)
 find_package(MbedTLS REQUIRED)
+set(CMAKE_FIND_PACKAGE_PREFER_CONFIG FALSE)
 find_package(ZLIB REQUIRED)
-
-if(NOT TARGET jansson::jansson)
-  find_package(jansson CONFIG QUIET)
-endif()
-if(NOT TARGET jansson::jansson)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(JANSSON REQUIRED IMPORTED_TARGET jansson)
-  add_library(jansson::jansson ALIAS PkgConfig::JANSSON)
-endif()
-
-# libsrt: pkg-config first, classic find as fallback (names cover the Ubuntu
-# "srt-gnutls" flavor and the obs-deps "srt" import lib on Windows). SRT is the
-# entire reason this fork exists -> hard fail when absent (both platforms).
-find_package(PkgConfig QUIET)
-set(BVC_SRT_LIBRARIES)
-set(BVC_SRT_INCLUDE_DIRS)
-if(PkgConfig_FOUND)
-  pkg_check_modules(BVC_SRT QUIET srt)
-endif()
-if(BVC_SRT_FOUND)
-  set(BVC_SRT_LIBRARIES ${BVC_SRT_LINK_LIBRARIES})
-  set(BVC_SRT_INCLUDE_DIRS ${BVC_SRT_INCLUDE_DIRS})
-else()
-  find_path(BVC_SRT_INCLUDE_DIR NAMES srt/srt.h)
-  find_library(BVC_SRT_LIBRARY NAMES srt srt-gnutls)
-  if(BVC_SRT_INCLUDE_DIR AND BVC_SRT_LIBRARY)
-    set(BVC_SRT_LIBRARIES ${BVC_SRT_LIBRARY})
-    set(BVC_SRT_INCLUDE_DIRS ${BVC_SRT_INCLUDE_DIR})
-  endif()
-endif()
-if(NOT BVC_SRT_LIBRARIES)
-  message(
-    FATAL_ERROR
-    "libsrt not found. On Linux install libsrt-gnutls-dev (or pass -DCMAKE_PREFIX_PATH to a prefix "
-    "containing it); on Windows ensure obs-deps (w32-srt) is part of CMAKE_PREFIX_PATH."
-  )
-endif()
+find_package(jansson REQUIRED)
+find_package(Libsrt REQUIRED)
 
 add_library(obs-rtmp-srt STATIC)
 
@@ -82,11 +62,12 @@ target_sources(
     $<$<BOOL:${ENABLE_HEVC}>:rtmp-hevc.c>
 )
 
-# srt_sock.c is the only consumer of <srt/srt.h> (ADR-0008); keeping the include
-# dir PRIVATE stops libsrt leaking into the plugin's own compilation.
+# srt_sock.c is the only consumer of <srt/srt.h> (ADR-0008); the include dir
+# arrives via Libsrt::Libsrt's INTERFACE and stays PRIVATE, so libsrt never
+# leaks into the plugin's own compilation.
 target_include_directories(obs-rtmp-srt PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/librtmp"
                                                 "${CMAKE_CURRENT_SOURCE_DIR}/happy-eyeballs"
-                                                ${BVC_SRT_INCLUDE_DIRS})
+)
 
 target_compile_definitions(
   obs-rtmp-srt
@@ -99,7 +80,7 @@ target_link_libraries(
           MbedTLS::mbedtls
           ZLIB::ZLIB
           jansson::jansson
-          ${BVC_SRT_LIBRARIES}
+          Libsrt::Libsrt
           $<$<PLATFORM_ID:Windows>:ws2_32>
           $<$<PLATFORM_ID:Windows>:winmm>
           $<$<PLATFORM_ID:Windows>:iphlpapi>
@@ -107,4 +88,12 @@ target_link_libraries(
           # mbedcrypto(obs-deps 静态库)的 entropy_poll 调 BCryptGenRandom，
           # 最终可执行/插件 DLL 链接时必须带上 bcrypt（2026-11-27 CI 实证 LNK2001）
           $<$<PLATFORM_ID:Windows>:bcrypt>
+)
+
+# 上游 obs-outputs 同款("Remove once jansson has been fixed on obs-deps"):
+# obs-deps 的 jansson 静态库混链了非统一 CRT，MSVC 需要忽略 CRT 库冲突警告。
+# 静态库上声明 ⇒ 作为 usage requirement 传播给最终链接的插件 DLL。
+target_link_options(
+  obs-rtmp-srt
+  PRIVATE $<$<PLATFORM_ID:Windows>:/IGNORE:4098> $<$<AND:$<PLATFORM_ID:Windows>,$<CONFIG:DEBUG>>:/NODEFAULTLIB:MSVCRT>
 )

@@ -42,9 +42,16 @@ TCP/RTMP 既有行为不变：
 5. **`rtmp-stream.c`**：`handle_socket_read` FIONREAD→`RTMP_SRT_DataPending`、
    rtmpsrt 沿用 rtmps 先例关 `new_socket_loop`、output 身份 `bvc_srt_output` / `protocols=bvc_srt`、
    `init_send` 按官方公式写入 `srtMaxBandwidth`（E-24 §5，上游码率聚合值 ×1.58）。
-6. **构建**：`CMakeLists.txt`（静态库，`USE_MBEDTLS CRYPTO`，照抄上游 obs-outputs 依赖块）
-   + `cmake/finders/FindMbedTLS.cmake`（OBS 原文）。crypto 后端 = mbedTLS，与官方 OBS 一致；
-   TLS 本身 rtmpsrt 用不到（SSL 位不置），握手 HMAC-SHA256 复用 librtmp 原生 `USE_MBEDTLS` 路径。
+6. **构建**：`CMakeLists.txt`（静态库 PIC，`USE_MBEDTLS CRYPTO`）+ `cmake/finders/`
+   = OBS 32.2 官方 Find 模块：`FindMbedTLS`（上游逐字）、`Findjansson`（上游逐字）、
+   `FindLibsrt`（上游逐字 + Debian 变体扩展：pkg-config 名 `srt`/`haisrt`、库名 `srt-gnutls`）。
+   依赖解析与上游 obs-outputs 同款：`find_package(MbedTLS/ZLIB/jansson/Libsrt REQUIRED)`
+   → imported targets（`MbedTLS::mbedtls`/`ZLIB::ZLIB`/`jansson::jansson`/`Libsrt::Libsrt`）。
+   静态/动态 = OBS 插件生态惯例：本库 STATIC（只进插件 MODULE，从不单独发布）；
+   第三方一律不打包，Linux/flatpak 链发行版 .so，Windows 链 obs-deps 导入库
+   （mbedcrypto 为静态 ⇒ bcrypt 与 jansson CRT 链接选项随之上游同款）。
+   crypto 后端 = mbedTLS，与官方 OBS 一致；TLS 本身 rtmpsrt 用不到（SSL 位不置），
+   握手 HMAC-SHA256 复用 librtmp 原生 `USE_MBEDTLS` 路径。
 
 ## 许可证
 
