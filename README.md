@@ -52,6 +52,13 @@ TCP/RTMP 既有行为不变：
    （mbedcrypto 为静态 ⇒ bcrypt 与 jansson CRT 链接选项随之上游同款）。
    crypto 后端 = mbedTLS，与官方 OBS 一致；TLS 本身 rtmpsrt 用不到（SSL 位不置），
    握手 HMAC-SHA256 复用 librtmp 原生 `USE_MBEDTLS` 路径。
+7. **零警告整治**（主仓“零警告原则”适用于 fork 全部文件，含上游原文）：
+   `rtmp.c`/`parseurl.c`/`rtmp-stream.c`/`rtmp-hevc.c`/`utils.h`/`flv-mux.c` 中 46 处
+   隐式 64→32 截断（指针差值、`sysconf`、`recv`/`send`、`obs_data_get_int` 等）加显式
+   转换——值域由协议/缓冲尺寸保证，无逻辑改动；`DecodeTEA` 加 `n < 1` 守卫
+   （空 secureToken 时 GCC `-Wmaybe-uninitialized` 命中真实 UB）；TEA 内层循环逗号
+   表达式改分号 + 大括号（clang `-Wcomma`，语义逐位相同）。验证 = GCC 与 clang-18
+   双工具链 0 警告（clang 专扫 `-Wshorten-64-to-32`/`-Wcomma`，flatpak 工具链即 clang）。
 
 ## 许可证
 

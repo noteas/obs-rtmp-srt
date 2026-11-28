@@ -419,7 +419,7 @@ static int send_packet(struct rtmp_stream *stream, struct encoder_packet *packet
 	if (handle_socket_read(stream))
 		return -1;
 
-	flv_packet_mux(packet, is_header ? 0 : stream->start_dts_offset, &data, &size, is_header);
+	flv_packet_mux(packet, (int32_t)(is_header ? 0 : stream->start_dts_offset), &data, &size, is_header);
 
 #ifdef TEST_FRAMEDROPS
 	droptest_cap_data_rate(stream, size);
@@ -452,7 +452,8 @@ static int send_packet_ex(struct rtmp_stream *stream, struct encoder_packet *pac
 	} else if (is_footer) {
 		flv_packet_end(packet, stream->video_codec[idx], &data, &size, idx);
 	} else {
-		flv_packet_frames(packet, stream->video_codec[idx], stream->start_dts_offset, &data, &size, idx);
+		flv_packet_frames(packet, stream->video_codec[idx], (int32_t)stream->start_dts_offset, &data, &size,
+				  idx);
 	}
 
 #ifdef TEST_FRAMEDROPS
@@ -483,7 +484,8 @@ static int send_audio_packet_ex(struct rtmp_stream *stream, struct encoder_packe
 	if (is_header) {
 		flv_packet_audio_start(packet, stream->audio_codec[idx], &data, &size, idx);
 	} else {
-		flv_packet_audio_frames(packet, stream->audio_codec[idx], stream->start_dts_offset, &data, &size, idx);
+		flv_packet_audio_frames(packet, stream->audio_codec[idx], (int32_t)stream->start_dts_offset, &data,
+					&size, idx);
 	}
 
 	ret = RTMP_Write(&stream->rtmp, (char *)data, (int)size, 0);
@@ -1031,7 +1033,7 @@ static int init_send(struct rtmp_stream *stream)
 
 			obs_data_t *params = obs_encoder_get_settings(vencoder);
 			if (params) {
-				int bitrate = obs_data_get_int(params, "bitrate");
+				int bitrate = (int)obs_data_get_int(params, "bitrate");
 				if (!bitrate) {
 					warn("Video encoder didn't return a "
 					     "valid bitrate, new network "
@@ -1052,7 +1054,7 @@ static int init_send(struct rtmp_stream *stream)
 
 			obs_data_t *params = obs_encoder_get_settings(aencoder);
 			if (params) {
-				int bitrate = obs_data_get_int(params, "bitrate");
+				int bitrate = (int)obs_data_get_int(params, "bitrate");
 				if (!bitrate)
 					bitrate = 160;
 				total_bitrate += bitrate;

@@ -186,7 +186,7 @@ static inline int ilog2(unsigned x)
 }
 static inline unsigned show_val(const HevcGetBitContext *s, unsigned n)
 {
-	return s->cache & ((UINT64_C(1) << n) - 1);
+	return (unsigned)(s->cache & ((UINT64_C(1) << n) - 1));
 }
 static inline unsigned int show_bits(HevcGetBitContext *s, unsigned int n)
 {

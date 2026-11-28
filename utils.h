@@ -3,12 +3,12 @@
 #if defined(__GNUC__) || defined(__clang__)
 static inline uint32_t clz32(unsigned long val)
 {
-	return __builtin_clz(val);
+	return __builtin_clz((unsigned int)val);
 }
 
 static inline uint32_t ctz32(unsigned long val)
 {
-	return __builtin_ctz(val);
+	return __builtin_ctz((unsigned int)val);
 }
 #elif defined(_MSC_VER) && _MSC_VER >= 1400
 static inline uint32_t clz32(unsigned long val)

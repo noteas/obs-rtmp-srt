@@ -283,7 +283,7 @@ void flv_meta_data(obs_output_t *context, uint8_t **output, size_t *size, bool w
 		s_wb32(&s, 0);
 	}
 
-	start_pos = serializer_get_pos(&s);
+	start_pos = (uint32_t)serializer_get_pos(&s); /* cast 同 259 行既有写法;64→32 收敛,位置恒 <4GB */
 
 	s_w8(&s, RTMP_PACKET_TYPE_INFO);
 
